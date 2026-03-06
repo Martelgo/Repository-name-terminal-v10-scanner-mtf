@@ -4,59 +4,57 @@ import pandas as pd
 import pandas_ta as ta
 import plotly.graph_objects as go
 from io import BytesIO
-import requests
 import time
-
-# --- SOLUCIÓN AL RATE LIMIT ---
-# Creamos una sesión que simula un navegador real para evitar bloqueos
-session = requests.Session()
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-})
 
 # Configuración visual
 st.set_page_config(page_title="V10 Elite Terminal Pro", layout="wide")
-st.title("🛰️ Terminal V10 Pro - Escáner Global")
+st.title("🛰️ Terminal V10 Pro - Sistema Anti-Bloqueo")
 
-# --- 1. OBTENCIÓN DE TICKERS ---
+# --- 1. OBTENCIÓN DE TICKERS (WIKIPEDIA) ---
 @st.cache_data(ttl=86400)
 def obtener_universo_autonomo():
+    # Usamos un header simple para Wikipedia
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         url_sp = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        sp500_table = pd.read_html(url_sp)[0]
+        sp500_table = pd.read_html(url_sp, storage_options=headers)[0]
         sp500_tickers = sp500_table['Symbol'].str.replace('.', '-').tolist()
         
         url_nas = 'https://en.wikipedia.org/wiki/Nasdaq-100'
-        nasdaq_table = pd.read_html(url_nas)[4]
+        nasdaq_table = pd.read_html(url_nas, storage_options=headers)[4]
         nasdaq_tickers = nasdaq_table['Ticker'].tolist()
         
         bmv_tickers = ["WALMEX.MX", "AMX.MX", "GFNORTEO.MX", "FEMSAUBD.MX", "GMEXICOB.MX", "CEMEXCPO.MX", "AC.MX"]
         
         return {"S&P 500": sp500_tickers, "NASDAQ 100": nasdaq_tickers, "BMV (México)": bmv_tickers}
     except Exception as e:
-        st.error(f"⚠️ Error en fuentes: {e}")
+        st.error(f"⚠️ Error al leer Wikipedia: {e}")
         return {}
 
-# --- 2. MOTOR DE PROCESAMIENTO (CON ANTIBLOQUEO) ---
+# --- 2. MOTOR DE PROCESAMIENTO V10 ---
 def procesar_v10(lista_tickers, nombre_mercado, progreso_bar, monitor_text):
     resultados = []
     total = len(lista_tickers)
     for i, t in enumerate(lista_tickers):
         try:
-            monitor_text.text(f"🔍 Escaneando {nombre_mercado}: {t} ({i+1}/{total})")
+            monitor_text.text(f"🔍 Analizando {nombre_mercado}: {t} ({i+1}/{total})")
             
-            # PASO CLAVE: Usamos la sesión para evitar el YFRateLimitError
-            tk = yf.Ticker(t, session=session)
+            # IMPORTANTE: No pasamos 'session'. Dejamos que yfinance gestione curl_cffi solo.
+            tk = yf.Ticker(t)
             
-            # Usamos fast_info primero porque es menos propenso a bloqueos
+            # Usamos fast_info para datos rápidos (menos riesgo de baneo)
             f_info = tk.fast_info
             p = f_info['last_price']
             
-            # Solo pedimos .info si el precio es válido
+            # Pedimos info fundamental
             info = tk.info
-            tj = info.get('targetMeanPrice') or (info.get('forwardPE', 15) * info.get('forwardEps', 1))
+            target = info.get('targetMeanPrice')
+            pe = info.get('forwardPE', 15)
+            eps = info.get('forwardEps', 1)
             ebitda = info.get('ebitda', 0) or 0
-            m = ((tj - p) / p) * 100 if p else 0
+            
+            p_justo = target if target else (pe * eps)
+            m = ((p_justo - p) / p) * 100 if p else 0
             
             if m > 5 and ebitda > 0:
                 estado = "🟢 COMPRA CLARA" if m > 15 else "🟡 VIGILAR"
@@ -65,14 +63,10 @@ def procesar_v10(lista_tickers, nombre_mercado, progreso_bar, monitor_text):
                     "Precio": round(p, 2), "Margen %": round(m, 1), "Sector": info.get('sector', 'N/A')
                 })
             
-            # Pequeña pausa cada 10 tickers para no saturar
-            if i % 10 == 0:
-                time.sleep(0.1)
+            # Pausa estratégica para evitar el 403
+            time.sleep(0.2) 
 
         except Exception as e:
-            if "Rate Limit" in str(e):
-                st.warning("⚠️ Yahoo ha limitado la velocidad. Esperando 5 segundos...")
-                time.sleep(5)
             continue
         progreso_bar.progress((i + 1) / total)
     return resultados
@@ -89,7 +83,7 @@ with tab1:
             mercado_selec = st.selectbox("Mercado:", list(universo.keys()))
             btn_solo = st.button(f"🚀 Escanear {mercado_selec}")
         with c2:
-            btn_global = st.button("🌍 ESCANEO GLOBAL (Lento pero Seguro)")
+            btn_global = st.button("🌍 ESCANEO GLOBAL")
 
         df_final = pd.DataFrame()
         if btn_solo:
@@ -106,32 +100,61 @@ with tab1:
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_final.to_excel(writer, index=False, sheet_name='V10')
-            st.download_button("📥 Descargar Excel", output.getvalue(), "Reporte_V10.xlsx")
+            st.download_button("📥 Descargar Reporte Excel", output.getvalue(), "Reporte_V10.xlsx")
             st.dataframe(df_final, use_container_width=True)
 
-# --- TAB 2: AUDITORIA (CON SESIÓN) ---
 with tab2:
-    st.subheader("Análisis 360")
+    st.subheader("Análisis 360 de Activo")
     ca1, ca2 = st.columns([1, 2])
     with ca1: mkt = st.radio("Mercado:", ["EUA", "México (.MX)"], key="aud_mkt")
-    with ca2: tk_in = st.text_input("Ticker:", "NVDA").upper()
+    with ca2: tk_in = st.text_input("Ticker:", "MSFT").upper()
 
     ticker_final = tk_in if mkt == "EUA" else (f"{tk_in}.MX" if ".MX" not in tk_in else tk_in)
 
     if ticker_final:
-        acc = yf.Ticker(ticker_final, session=session)
-        h = acc.history(period="1y")
-        if not h.empty:
-            p_act = h['Close'].iloc[-1]
-            st.markdown(f"### Precio: ${p_act:.2f}")
-            # ... (Resto de tu lógica de auditoría estilo hacker)
-            st.code("MODO AUDITORÍA ACTIVADO - LISTO", language="text")
-            fig = go.Figure(data=[go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'])])
-            fig.update_layout(template="plotly_dark", height=400)
-            st.plotly_chart(fig, use_container_width=True)
+        with st.spinner('Auditando...'):
+            acc = yf.Ticker(ticker_final)
+            h = acc.history(period="1y")
+            info = acc.info
+            if not h.empty:
+                h['RSI'] = ta.rsi(h['Close'], length=14)
+                h['SMA200'] = ta.sma(h['Close'], length=200)
+                p_act = h['Close'].iloc[-1]
+                rsi_v = h['RSI'].iloc[-1]
+                sma_v = h['SMA200'].iloc[-1]
+                
+                p_justo = info.get('targetMeanPrice') or (info.get('forwardPE', 15) * info.get('forwardEps', 1))
+                margen = ((p_justo - p_act) / p_act) * 100
+                ebitda = info.get('ebitda', 0) or 0
+                
+                reporte = f"""
+=================================================================
+                  MÉTRICA           VALOR       ESTADO
+-----------------------------------------------------------------
+            Precio Actual          ${p_act:>8.2f}    Cotizando
+            Margen Seg.            {margen:>7.1f}%       {"✅" if margen > 15 else "❌"}
+                RSI (14d)             {rsi_v:>7.1f}  {"📉" if rsi_v < 35 else "⚖️"}
+                   EBITDA          {ebitda:>14,}       {"✅" if ebitda > 0 else "⚠️"}
+=================================================================
+"""
+                st.code(reporte, language="text")
+                fig = go.Figure(data=[go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'])])
+                fig.add_trace(go.Scatter(x=h.index, y=h['SMA200'], line=dict(color='orange')))
+                fig.update_layout(template="plotly_dark", height=400, xaxis_rangeslider_visible=False)
+                st.plotly_chart(fig, use_container_width=True)
 
-# --- TAB 3: SENTIMIENTO ---
 with tab3:
-    st.subheader("Sentimiento")
-    val = ta.rsi(yf.Ticker("SPY", session=session).history(period="1y")['Close'], length=14).iloc[-1]
-    st.metric("RSI SPY", f"{val:.2f}")
+    st.subheader("Indicador de Pánico y Codicia")
+    spy_h = yf.Ticker("SPY").history(period="1y")
+    val = ta.rsi(spy_h['Close'], length=14).iloc[-1]
+    
+    fig_sent = go.Figure(go.Indicator(
+        mode = "gauge+number", value = val,
+        title = {'text': "Sentimiento RSI (SPY)", 'font': {'size': 18}},
+        gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "lightgray"},
+                 'steps': [{'range': [0, 30], 'color': "red"}, 
+                           {'range': [30, 70], 'color': "gray"}, 
+                           {'range': [70, 100], 'color': "green"}]}
+    ))
+    fig_sent.update_layout(height=350, template="plotly_dark")
+    st.plotly_chart(fig_sent, use_container_width=True)
