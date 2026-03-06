@@ -5,25 +5,39 @@ import pandas_ta as ta
 import plotly.graph_objects as go
 from io import BytesIO
 
-# Configuración visual
+# Configuración visual de la Terminal V10
 st.set_page_config(page_title="V10 Elite Terminal Pro", layout="wide")
-st.title("🛰️ Terminal V10 Pro - Consola de Auditoría")
+st.title("🛰️ Terminal V10 Pro - Sistema de Inteligencia Financiera")
 
-# --- (Las funciones obtener_universo_autonomo y procesar_lista_tickers se mantienen igual) ---
+# --- 1. OBTENCIÓN AUTOMÁTICA DE TICKERS ---
 @st.cache_data(ttl=86400)
 def obtener_universo_autonomo():
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
     try:
+        # S&P 500
         url_sp = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
         sp500_table = pd.read_html(url_sp, storage_options=headers)[0]
         sp500_tickers = sp500_table['Symbol'].str.replace('.', '-').tolist()
+        
+        # NASDAQ 100
         url_nas = 'https://en.wikipedia.org/wiki/Nasdaq-100'
         nasdaq_table = pd.read_html(url_nas, storage_options=headers)[4]
         nasdaq_tickers = nasdaq_table['Ticker'].tolist()
-        bmv_tickers = ["WALMEX.MX", "AMX.MX", "GFNORTEO.MX", "FEMSAUBD.MX", "GMEXICOB.MX", "GAPB.MX", "CEMEXCPO.MX", "BIMBOA.MX", "GRUMAB.MX", "KIMBERA.MX"]
+        
+        # BMV (Lista Completa)
+        bmv_tickers = [
+            "WALMEX.MX", "AMX.MX", "GFNORTEO.MX", "FEMSAUBD.MX", "GMEXICOB.MX", 
+            "TLEVISAA.MX", "ASURB.MX", "BBAJIOO.MX", "GAPB.MX", "CEMEXCPO.MX",
+            "ALFAA.MX", "ALPEKA.MX", "BIMBOA.MX", "GRUMAB.MX", "ORBIA.MX", 
+            "PINFRA.MX", "KIMBERA.MX", "AC.MX", "LABB.MX", "OMAB.MX"
+        ]
+        
         return {"S&P 500": sp500_tickers, "NASDAQ 100": nasdaq_tickers, "BMV (México)": bmv_tickers}
-    except: return {}
+    except Exception as e:
+        st.error(f"⚠️ Error en fuentes: {e}")
+        return {}
 
+# --- 2. MOTOR DE PROCESAMIENTO ---
 def procesar_lista_tickers(lista_tickers, nombre_mercado, progreso_bar, monitor_text):
     resultados = []
     total = len(lista_tickers)
@@ -33,97 +47,136 @@ def procesar_lista_tickers(lista_tickers, nombre_mercado, progreso_bar, monitor_
             tk = yf.Ticker(t)
             p = tk.fast_info['last_price']
             info = tk.info
+            
+            # Lógica V10
             tj = info.get('targetMeanPrice') or (info.get('forwardPE', 15) * info.get('forwardEps', 1))
             ebitda = info.get('ebitda', 0) or 0
             m = ((tj - p) / p) * 100 if p else 0
+            
             if m > 5 and ebitda > 0:
                 estado = "🟢 COMPRA CLARA" if m > 15 else "🟡 VIGILAR"
-                resultados.append({"Mercado": nombre_mercado, "Ticker": t, "Estado": estado, "Precio": round(p, 2), "Margen %": round(m, 1), "Sector": info.get('sector', 'N/A')})
+                resultados.append({
+                    "Mercado": nombre_mercado, "Ticker": t, "Estado": estado,
+                    "Precio": round(p, 2), "Margen %": round(m, 1), "Sector": info.get('sector', 'N/A')
+                })
         except: continue
         progreso_bar.progress((i + 1) / total)
     return resultados
 
-# --- NAVEGACIÓN ---
-tab1, tab2, tab3 = st.tabs(["🎯 RADAR SEMÁFORO", "🔍 AUDITORIA PRO", "🌡️ SENTIMIENTO"])
+# --- 3. INTERFAZ POR PESTAÑAS ---
+tab1, tab2, tab3 = st.tabs(["🎯 RADAR SEMÁFORO", "🔍 AUDITORIA 360", "🌡️ SENTIMIENTO"])
 
-# --- TAB 1: RADAR (Se mantiene tu lógica de escaneo) ---
+# --- TAB 1: RADAR ---
 with tab1:
-    st.subheader("Radar de Oportunidades")
+    st.subheader("Radar de Oportunidades Segmentado")
     universo = obtener_universo_autonomo()
     if universo:
         c1, c2 = st.columns(2)
         with c1:
-            m_sel = st.selectbox("Mercado:", list(universo.keys()))
-            b_s = st.button(f"🚀 Escanear {m_sel}")
-        with c2: b_g = st.button("🌍 ESCANEO GLOBAL")
-        
-        df_f = pd.DataFrame()
-        if b_s: df_f = pd.DataFrame(procesar_lista_tickers(universo[m_sel], m_sel, st.progress(0), st.empty()))
-        elif b_g:
-            todo = []
-            p = st.progress(0)
-            m = st.empty()
-            for n, tks in universo.items(): todo.extend(procesar_lista_tickers(tks, n, p, m))
-            df_f = pd.DataFrame(todo)
-        
-        if not df_f.empty:
-            df_f = df_f.drop_duplicates(subset=['Ticker'])
-            st.dataframe(df_f.sort_values(by="Margen %", ascending=False), use_container_width=True)
+            mercado_selec = st.selectbox("Mercado Específico:", list(universo.keys()))
+            btn_solo = st.button(f"🚀 Escanear {mercado_selec}")
+        with c2:
+            st.write("Análisis de Todo el Universo")
+            btn_global = st.button("🌍 EJECUTAR ESCANEO GLOBAL")
 
-# --- TAB 2: AUDITORIA PRO (RESTAURADA Y MEJORADA) ---
-with tab2:
-    st.subheader("Consola de Auditoría Profunda")
-    col_search1, col_search2 = st.columns([1, 3])
-    with col_search1:
-        ticker_input = st.text_input("Ingresa Ticker:", "NVDA").upper()
-    
-    if ticker_input:
-        with st.spinner(f'Auditando {ticker_input}...'):
-            asset = yf.Ticker(ticker_input)
-            hist = asset.history(period="1y")
-            info = asset.info
+        df_final = pd.DataFrame()
+        if btn_solo:
+            df_final = pd.DataFrame(procesar_lista_tickers(universo[mercado_selec], mercado_selec, st.progress(0), st.empty()))
+        elif btn_global:
+            todas = []
+            p, m = st.progress(0), st.empty()
+            for n, tks in universo.items(): todas.extend(procesar_lista_tickers(tks, n, p, m))
+            df_final = pd.DataFrame(todas)
+
+        if not df_final.empty:
+            df_final = df_final.drop_duplicates(subset=['Ticker'])
+            st.success(f"✅ {len(df_final)} Oportunidades detectadas")
             
-            if not hist.empty:
-                # Cálculos Técnicos
-                hist['RSI'] = ta.rsi(hist['Close'], length=14)
-                hist['SMA200'] = ta.sma(hist['Close'], length=200)
-                
-                # Datos actuales
-                p_act = hist['Close'].iloc[-1]
-                rsi_v = hist['RSI'].iloc[-1]
-                sma_v = hist['SMA200'].iloc[-1]
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_final.to_excel(writer, index=False, sheet_name='V10_Report')
+            st.download_button(label="📥 Descargar Reporte en Excel", data=output.getvalue(), file_name='Reporte_V10.xlsx')
+            
+            df_final.index = range(1, len(df_final) + 1)
+            st.dataframe(df_final.sort_values(by=["Mercado", "Margen %"], ascending=[True, False]), use_container_width=True)
+
+# --- TAB 2: AUDITORIA (INTERFAZ ORIGINAL RESTAURADA) ---
+with tab2:
+    st.subheader("Análisis 360 de Activo")
+    c_i1, c_i2 = st.columns([1, 2])
+    with c_i1: mkt = st.radio("Mercado:", ["EUA", "México (.MX)"])
+    with c_i2: tk_in = st.text_input("Ticker:", "MSFT").upper()
+
+    ticker_final = tk_in if mkt == "EUA" else (f"{tk_in}.MX" if ".MX" not in tk_in else tk_in)
+
+    if ticker_final:
+        with st.spinner('Auditando...'):
+            acc = yf.Ticker(ticker_final)
+            h = acc.history(period="1y")
+            info = acc.info
+            if not h.empty:
+                # Técnicos
+                h['RSI'] = ta.rsi(h['Close'], length=14)
+                h['SMA200'] = ta.sma(h['Close'], length=200)
+                p_act = h['Close'].iloc[-1]
+                rsi_v = h['RSI'].iloc[-1] if not pd.isna(h['RSI'].iloc[-1]) else 50
+                sma_v = h['SMA200'].iloc[-1] if not pd.isna(h['SMA200'].iloc[-1]) else p_act
                 
                 # Fundamentales
-                p_target = info.get('targetMeanPrice') or (info.get('forwardPE', 15) * info.get('forwardEps', 1))
-                margen_seg = ((p_target - p_act) / p_act) * 100
-                ebitda_v = info.get('ebitda', "N/A")
-
-                # --- DISEÑO DE MÉTRICAS ---
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Precio Actual", f"${p_act:.2f}")
-                m2.metric("Precio Justo (V10)", f"${p_target:.2f}", f"{margen_seg:.1f}%")
-                m3.metric("RSI (14d)", f"{rsi_v:.1f}", "Sobreventa" if rsi_v < 30 else "Normal")
-                m4.metric("Tendencia (SMA 200)", f"${sma_v:.2f}", "ALCISTA" if p_act > sma_v else "BAJISTA")
-
-                # --- GRÁFICO PROFESIONAL ---
+                p_justo = info.get('targetMeanPrice') or (info.get('forwardPE', 15) * info.get('forwardEps', 1))
+                margen = ((p_justo - p_act) / p_act) * 100
+                ebitda = info.get('ebitda', 0) or 0
                 
-                fig = go.Figure()
-                # Velas
-                fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Precio"))
-                # SMA 200
-                fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA200'], line=dict(color='yellow', width=1.5), name="SMA 200"))
+                est_m = "DESCUENTO" if margen > 15 else "CARO"
+                est_r = "SOBREVENTA" if rsi_v < 35 else ("SOBRECOMPRA" if rsi_v > 65 else "NEUTRAL")
+                est_t = "ALCISTA" if p_act > sma_v else "BAJISTA"
+                est_e = "Sólido" if ebitda > 0 else "RIESGO"
+
+                st.markdown(f"### 🏢 {info.get('longName', ticker_final)}")
+                reporte_v2 = f"""
+=================================================================
+                  MÉTRICA           VALOR       ESTADO
+-----------------------------------------------------------------
+            Precio Actual          ${p_act:>8.2f}    Cotizando
+Precio Justo de la Acción          ${p_justo:>8.2f}    Referencia
+              Margen Seg.            {margen:>7.1f}%       {"✅" if est_m=="DESCUENTO" else "❌"} {est_m}
+                RSI (14d)             {rsi_v:>7.1f}  {"📉" if rsi_v<35 else "⚖️"} {est_r}
+                  SMA 200          ${sma_v:>8.2f}    {"🚀" if est_t=="ALCISTA" else "⚠️"} {est_t}
+                   EBITDA          {ebitda:>14,}       {"✅" if ebitda > 0 else "⚠️"} {est_e}
+-----------------------------------------------------------------
+📍 NIVELES DE COMPRA:  1: ${p_act*0.96:.2f} | 2: ${p_act*0.92:.2f} | 3: ${p_act*0.88:.2f}
+=================================================================
+"""
+                st.code(reporte_v2, language="text")
                 
-                fig.update_layout(title=f"Gráfico Histórico: {info.get('longName', ticker_input)}", template="plotly_dark", xaxis_rangeslider_visible=False, height=600)
+                fig = go.Figure(data=[go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'])])
+                fig.add_trace(go.Scatter(x=h.index, y=h['SMA200'], line=dict(color='orange', width=2), name="SMA 200"))
+                fig.update_layout(template="plotly_dark", height=450, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Resumen de Empresa
-                with st.expander("Ver Descripción de la Empresa"):
-                    st.write(info.get('longBusinessSummary', 'No hay descripción disponible.'))
-            else:
-                st.error("No se encontraron datos para este Ticker. Revisa si está bien escrito.")
-
-# --- TAB 3: SENTIMIENTO ---
+# --- TAB 3: SENTIMIENTO (VELOCÍMETRO RESTAURADO) ---
 with tab3:
-    st.subheader("Sentimiento del Mercado")
-    spy_rsi = ta.rsi(yf.Ticker("SPY").history(period="1mo")['Close'], length=14).iloc[-1]
-    st.metric("RSI SPY", f"{spy_rsi:.2f}")
+    st.subheader("Indicador de Pánico y Codicia")
+    spy_h = yf.Ticker("SPY").history(period="1y")
+    spy_h['RSI'] = ta.rsi(spy_h['Close'], length=14)
+    val = spy_h['RSI'].iloc[-1]
+    
+    if val < 30: etiq, col = "PÁNICO EXTREMO", "red"
+    elif val < 45: etiq, col = "MIEDO", "orange"
+    elif val < 60: etiq, col = "NEUTRAL", "gray"
+    elif val < 75: etiq, col = "CODICIA", "lightgreen"
+    else: etiq, col = "EUFORIA EXTREMA", "green"
+
+    
+    fig_sent = go.Figure(go.Indicator(
+        mode = "gauge+number", value = val,
+        number = {'font': {'size': 40}, 'suffix': "%"},
+        title = {'text': f"Estado Actual: {etiq}", 'font': {'size': 18}},
+        gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': col},
+                 'steps': [{'range': [0, 30], 'color': "red"}, 
+                           {'range': [30, 70], 'color': "gray"}, 
+                           {'range': [70, 100], 'color': "green"}]}
+    ))
+    fig_sent.update_layout(height=350, template="plotly_dark", margin=dict(l=20, r=20, t=50, b=20))
+    st.plotly_chart(fig_sent, use_container_width=True)
+    st.info("💡 El RSI del SPY nos dice si el mercado está sobrecomprado (peligro) o en rebote (oportunidad).")
