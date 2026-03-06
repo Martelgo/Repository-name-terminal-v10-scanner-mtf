@@ -2,97 +2,99 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
+from io import BytesIO
 
 st.set_page_config(page_title="V10 Institutional Scanner", layout="wide")
 
 st.title("🚀 V10 Institutional Strategy Scanner")
-st.markdown("### Enfoque: Tendencia Institucional y Pullbacks")
 
-# --- LÓGICA DE PROCESAMIENTO ---
-@st.cache_data(ttl=3600)  # Caché de 1 hora para no saturar descargas
-def get_v10_analysis(ticker):
+# --- MOTOR DE ANÁLISIS MEJORADO ---
+def analizar_activo_v10(ticker):
     try:
-        # 1. Filtro Estructural Daily
         df_1d = yf.download(ticker, period="1y", interval="1d", progress=False)
-        if len(df_1d) < 200: return None
-        
+        if df_1d.empty or len(df_1d) < 200:
+            return {"Ticker": ticker, "Estado": "Datos Insuficientes", "Score": 0}
+
+        # Valores actuales
+        price_now = df_1d['Close'].iloc[-1]
         ema200_1d = ta.ema(df_1d['Close'], length=200).iloc[-1]
         ema50_1d = ta.ema(df_1d['Close'], length=50).iloc[-1]
-        price_now = df_1d['Close'].iloc[-1]
-        
-        # Regla de oro institucional: Precio > EMA200 y EMA50 > EMA200
-        pass_daily = price_now > ema200_1d and ema50_1d > ema200_1d
-        if not pass_daily: return None # Descarte inmediato
 
-        score = 4 
+        # FILTRO 1: Tendencia Estructural
+        condicion_alcista = price_now > ema200_1d and ema50_1d > ema200_1d
         
-        # 2. Momentum 4H (Usamos 1h como base técnica)
+        if not condicion_alcista:
+            return {
+                "Ticker": ticker, 
+                "Precio": round(float(price_now), 2),
+                "Score": 0, 
+                "Estado": "FUERA DE TENDENCIA (Precio < EMA200)",
+                "Vol x": 0
+            }
+
+        # Si pasa, calculamos el Score completo
+        score = 4
+        
+        # Momentum 4H
         df_4h = yf.download(ticker, period="1mo", interval="1h", progress=False)
         ema9_4h = ta.ema(df_4h['Close'], length=9).iloc[-1]
         ema50_4h = ta.ema(df_4h['Close'], length=50).iloc[-1]
         if ema9_4h > ema50_4h: score += 3
         
-        # 3. Pullback 15M
+        # Pullback 15M
         df_15m = yf.download(ticker, period="5d", interval="15m", progress=False)
         ema9_15m = ta.ema(df_15m['Close'], length=9).iloc[-1]
         ema50_15m = ta.ema(df_15m['Close'], length=50).iloc[-1]
-        price_15m = df_15m['Close'].iloc[-1]
-        
-        if min(ema9_15m, ema50_15m) < price_15m < max(ema9_15m, ema50_15m):
-            score += 2
+        p_15m = df_15m['Close'].iloc[-1]
+        if min(ema9_15m, ema50_15m) < p_15m < max(ema9_15m, ema50_15m): score += 2
             
-        # 4. Volumen
-        vol_actual = df_15m['Volume'].iloc[-1]
-        vol_avg = df_15m['Volume'].rolling(20).mean().iloc[-1]
-        vol_mult = round(vol_actual / vol_avg, 2)
-        if vol_actual > (1.2 * vol_avg): score += 1
+        # Volumen
+        v_act = df_15m['Volume'].iloc[-1]
+        v_avg = df_15m['Volume'].rolling(20).mean().iloc[-1]
+        v_mult = round(v_act / v_avg, 2)
+        if v_act > (1.2 * v_avg): score += 1
+
+        status = "COMPRA CONFIRMADA" if score >= 9 else ("SECTOR PREPARADO" if score == 8 else "VIGILAR")
         
         return {
-            "Ticker": ticker,
-            "Precio": round(float(price_now), 2),
-            "Score": score,
-            "Vol x": vol_mult,
-            "Estado": "COMPRA CONFIRMADA" if score >= 9 else ("SECTOR PREPARADO" if score == 8 else "VIGILAR")
+            "Ticker": ticker, "Precio": round(float(price_now), 2),
+            "Score": score, "Vol x": v_mult, "Estado": status
         }
-    except Exception:
+    except:
         return None
 
-# --- INTERFAZ LATERAL ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("Configuración")
-    mercado = st.radio("Selecciona Mercado", ["EUA (NYSE/NASDAQ)", "México (BMV)"])
-    tickers_input = st.text_area("Escribe los Tickers (separados por coma)", "NVDA, MSFT, AAPL, AMD")
-    ejecutar = st.button("Analizar V10")
+    mercado = st.radio("Mercado", ["EUA", "México"])
+    txt_input = st.text_area("Tickers (ej: NVDA, WALMEX)", "WALMEX, AMXN, GFNORTEO")
+    btn = st.button("Analizar V10")
 
-# --- PROCESAMIENTO ---
-if ejecutar:
-    # Limpiar y preparar lista de tickers
-    raw_list = [t.strip().upper() for t in tickers_input.split(",")]
-    final_tickers = []
+if btn:
+    tickers = [t.strip().upper() for t in txt_input.split(",")]
+    if mercado == "México":
+        tickers = [f"{t}.MX" if not t.endswith(".MX") else t for t in tickers]
     
-    for t in raw_list:
-        if mercado == "México (BMV)" and not t.endswith(".MX"):
-            final_tickers.append(f"{t}.MX")
-        else:
-            final_tickers.append(t)
-
     results = []
-    with st.spinner(f"Analizando {len(final_tickers)} activos..."):
-        for t in final_tickers:
-            res = get_v10_analysis(t)
-            if res:
-                results.append(res)
+    for t in tickers:
+        res = analizar_activo_v10(t)
+        if res: results.append(res)
     
     if results:
         df = pd.DataFrame(results)
+        st.subheader("Análisis de Portafolio V10")
         
-        # Formato visual
-        def color_status(val):
-            if val == "COMPRA CONFIRMADA": return 'background-color: #004d00; color: white'
-            if val == "SECTOR PREPARADO": return 'background-color: #4d4d00; color: white'
-            return ''
-
-        st.subheader("Resultados del Scanner")
-        st.dataframe(df.style.applymap(color_status, subset=['Estado']), use_container_width=True)
-    else:
-        st.info("Ninguno de los activos ingresados cumple con el filtro institucional (Precio > EMA 200).")
+        # Mostrar tabla
+        st.dataframe(df, use_container_width=True)
+        
+        # Botón para Excel
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False, sheet_name='Scanner_V10')
+        
+        st.download_button(
+            label="📥 Descargar Reporte Excel",
+            data=output.getvalue(),
+            file_name="analisis_v10.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
