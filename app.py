@@ -2,99 +2,160 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
+import plotly.graph_objects as go
 from io import BytesIO
 
-st.set_page_config(page_title="V10 Institutional Scanner", layout="wide")
+# Configuración visual de la Terminal
+st.set_page_config(page_title="V10 Elite Terminal Pro", layout="wide")
+st.title("🛰️ Terminal V10 Pro - Escáner Global Autónomo")
 
-st.title("🚀 V10 Institutional Strategy Scanner")
-
-# --- MOTOR DE ANÁLISIS MEJORADO ---
-def analizar_activo_v10(ticker):
+# --- 1. OBTENCIÓN AUTOMÁTICA DE TICKERS ---
+@st.cache_data(ttl=86400)
+def obtener_universo_autonomo():
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
     try:
-        df_1d = yf.download(ticker, period="1y", interval="1d", progress=False)
-        if df_1d.empty or len(df_1d) < 200:
-            return {"Ticker": ticker, "Estado": "Datos Insuficientes", "Score": 0}
-
-        # Valores actuales
-        price_now = df_1d['Close'].iloc[-1]
-        ema200_1d = ta.ema(df_1d['Close'], length=200).iloc[-1]
-        ema50_1d = ta.ema(df_1d['Close'], length=50).iloc[-1]
-
-        # FILTRO 1: Tendencia Estructural
-        condicion_alcista = price_now > ema200_1d and ema50_1d > ema200_1d
+        # S&P 500
+        url_sp = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+        sp500_table = pd.read_html(url_sp, storage_options=headers)[0]
+        sp500_tickers = sp500_table['Symbol'].str.replace('.', '-').tolist()
         
-        if not condicion_alcista:
-            return {
-                "Ticker": ticker, 
-                "Precio": round(float(price_now), 2),
-                "Score": 0, 
-                "Estado": "FUERA DE TENDENCIA (Precio < EMA200)",
-                "Vol x": 0
-            }
-
-        # Si pasa, calculamos el Score completo
-        score = 4
+        # NASDAQ 100
+        url_nas = 'https://en.wikipedia.org/wiki/Nasdaq-100'
+        nasdaq_table = pd.read_html(url_nas, storage_options=headers)[4]
+        nasdaq_tickers = nasdaq_table['Ticker'].tolist()
         
-        # Momentum 4H
-        df_4h = yf.download(ticker, period="1mo", interval="1h", progress=False)
-        ema9_4h = ta.ema(df_4h['Close'], length=9).iloc[-1]
-        ema50_4h = ta.ema(df_4h['Close'], length=50).iloc[-1]
-        if ema9_4h > ema50_4h: score += 3
-        
-        # Pullback 15M
-        df_15m = yf.download(ticker, period="5d", interval="15m", progress=False)
-        ema9_15m = ta.ema(df_15m['Close'], length=9).iloc[-1]
-        ema50_15m = ta.ema(df_15m['Close'], length=50).iloc[-1]
-        p_15m = df_15m['Close'].iloc[-1]
-        if min(ema9_15m, ema50_15m) < p_15m < max(ema9_15m, ema50_15m): score += 2
-            
-        # Volumen
-        v_act = df_15m['Volume'].iloc[-1]
-        v_avg = df_15m['Volume'].rolling(20).mean().iloc[-1]
-        v_mult = round(v_act / v_avg, 2)
-        if v_act > (1.2 * v_avg): score += 1
-
-        status = "COMPRA CONFIRMADA" if score >= 9 else ("SECTOR PREPARADO" if score == 8 else "VIGILAR")
+        # BMV (Lista ampliada del IPC México)
+        bmv_tickers = [
+            "WALMEX.MX", "AMX.MX", "GFNORTEO.MX", "FEMSAUBD.MX", "GMEXICOB.MX", 
+            "TLEVISAA.MX", "ASURB.MX", "BBAJIOO.MX", "GAPB.MX", "CEMEXCPO.MX",
+            "ALFAA.MX", "ALPEKA.MX", "BIMBOA.MX", "GRUMAB.MX", "ORBIA.MX", 
+            "PINFRA.MX", "KIMBERA.MX", "AC.MX", "LABB.MX", "OMAB.MX"
+        ]
         
         return {
-            "Ticker": ticker, "Precio": round(float(price_now), 2),
-            "Score": score, "Vol x": v_mult, "Estado": status
+            "S&P 500": sp500_tickers,
+            "NASDAQ 100": nasdaq_tickers,
+            "BMV (México)": bmv_tickers
         }
-    except:
-        return None
+    except Exception as e:
+        st.error(f"⚠️ Error al conectar con fuentes: {e}")
+        return {}
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.header("Configuración")
-    mercado = st.radio("Mercado", ["EUA", "México"])
-    txt_input = st.text_area("Tickers (ej: NVDA, WALMEX)", "WALMEX, AMXN, GFNORTEO")
-    btn = st.button("Analizar V10")
+# --- 2. MOTOR DE PROCESAMIENTO ---
+def procesar_lista_tickers(lista_tickers, nombre_mercado, progreso_bar, monitor_text):
+    resultados = []
+    total = len(lista_tickers)
+    
+    for i, t in enumerate(lista_tickers):
+        try:
+            monitor_text.text(f"🔍 Analizando {nombre_mercado}: {t} ({i+1}/{total})")
+            tk = yf.Ticker(t)
+            
+            p = tk.fast_info['last_price']
+            info = tk.info
+            
+            # Lógica V10
+            target = info.get('targetMeanPrice')
+            eps = info.get('forwardEps')
+            pe = info.get('forwardPE', 15)
+            ebitda = info.get('ebitda', 0) or 0
+            
+            p_justo = target if target else (pe * eps if eps else p)
+            margen = ((p_justo - p) / p) * 100 if p else 0
+            
+            # Filtro Semáforo
+            if margen > 15 and ebitda > 0:
+                estado = "🟢 COMPRA CLARA"
+            elif margen > 5 and ebitda > 0:
+                estado = "🟡 VIGILAR"
+            else:
+                continue 
+                
+            resultados.append({
+                "Mercado": nombre_mercado,
+                "Ticker": t,
+                "Estado": estado,
+                "Precio": round(p, 2),
+                "Margen %": round(margen, 1),
+                "Sector": info.get('sector', 'N/A')
+            })
+        except:
+            continue
+        progreso_bar.progress((i + 1) / total)
+    
+    return resultados
 
-if btn:
-    tickers = [t.strip().upper() for t in txt_input.split(",")]
-    if mercado == "México":
-        tickers = [f"{t}.MX" if not t.endswith(".MX") else t for t in tickers]
+# --- 3. INTERFAZ ---
+tab1, tab2, tab3 = st.tabs(["🎯 RADAR SEMÁFORO", "🔍 AUDITORIA", "🌡️ SENTIMIENTO"])
+
+with tab1:
+    st.subheader("Radar de Oportunidades Segmentado")
+    universo = obtener_universo_autonomo()
     
-    results = []
-    for t in tickers:
-        res = analizar_activo_v10(t)
-        if res: results.append(res)
-    
-    if results:
-        df = pd.DataFrame(results)
-        st.subheader("Análisis de Portafolio V10")
-        
-        # Mostrar tabla
-        st.dataframe(df, use_container_width=True)
-        
-        # Botón para Excel
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='Scanner_V10')
-        
-        st.download_button(
-            label="📥 Descargar Reporte Excel",
-            data=output.getvalue(),
-            file_name="analisis_v10.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    if universo:
+        c1, c2 = st.columns(2)
+        with c1:
+            mercado_selec = st.selectbox("Mercado Específico:", list(universo.keys()))
+            btn_solo = st.button(f"🚀 Escanear {mercado_selec}")
+        with c2:
+            st.write("Análisis de Todo el Universo")
+            btn_global = st.button("🌍 EJECUTAR ESCANEO GLOBAL")
+
+        df_final = pd.DataFrame()
+
+        if btn_solo:
+            progreso = st.progress(0)
+            monitor = st.empty()
+            datos = procesar_lista_tickers(universo[mercado_selec], mercado_selec, progreso, monitor)
+            df_final = pd.DataFrame(datos)
+            monitor.empty()
+
+        elif btn_global:
+            todas_oportunidades = []
+            progreso = st.progress(0)
+            monitor = st.empty()
+            for m_nombre, m_tickers in universo.items():
+                res_m = procesar_lista_tickers(m_tickers, m_nombre, progreso, monitor)
+                todas_oportunidades.extend(res_m)
+            df_final = pd.DataFrame(todas_oportunidades)
+            monitor.empty()
+
+        if not df_final.empty:
+            # --- LIMPIEZA DE DUPLICADOS (FIX) ---
+            df_final = df_final.drop_duplicates(subset=['Ticker'], keep='first')
+            
+            st.success(f"✅ Se encontraron {len(df_final)} oportunidades únicas.")
+            
+            # Botón de Excel
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_final.to_excel(writer, index=False, sheet_name='Oportunidades_V10')
+            excel_data = output.getvalue()
+            
+            st.download_button(
+                label="📥 Descargar Reporte en Excel",
+                data=excel_data,
+                file_name='Reporte_V10_Final.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            
+            df_final.index = range(1, len(df_final) + 1)
+            st.dataframe(df_final.sort_values(by=["Mercado", "Margen %"], ascending=[True, False]), use_container_width=True)
+
+with tab2:
+    st.subheader("Auditoría de Activo")
+    tk_in = st.text_input("Ticker:", "MSFT").upper()
+    if tk_in:
+        acc = yf.Ticker(tk_in)
+        h = acc.history(period="1y")
+        if not h.empty:
+            fig = go.Figure(data=[go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'])])
+            fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+with tab3:
+    st.subheader("Sentimiento del Mercado")
+    spy_h = yf.Ticker("SPY").history(period="1mo")
+    rsi_val = ta.rsi(spy_h['Close'], length=14).iloc[-1]
+    st.metric("RSI SPY", f"{rsi_val:.2f}")
+    st.info("RSI < 30: Pánico | RSI > 70: Euforia")
