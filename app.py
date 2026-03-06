@@ -8,12 +8,11 @@ import time
 
 # Configuración visual
 st.set_page_config(page_title="V10 Elite Terminal Pro", layout="wide")
-st.title("🛰️ Terminal V10 Pro - Sistema Anti-Bloqueo")
+st.title("🛰️ Terminal V10 Pro - Escáner de Alta Disponibilidad")
 
-# --- 1. OBTENCIÓN DE TICKERS (WIKIPEDIA) ---
+# --- 1. OBTENCIÓN DE TICKERS ---
 @st.cache_data(ttl=86400)
 def obtener_universo_autonomo():
-    # Usamos un header simple para Wikipedia
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         url_sp = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
@@ -28,33 +27,26 @@ def obtener_universo_autonomo():
         
         return {"S&P 500": sp500_tickers, "NASDAQ 100": nasdaq_tickers, "BMV (México)": bmv_tickers}
     except Exception as e:
-        st.error(f"⚠️ Error al leer Wikipedia: {e}")
+        st.error(f"⚠️ Error en fuentes: {e}")
         return {}
 
-# --- 2. MOTOR DE PROCESAMIENTO V10 ---
+# --- 2. MOTOR DE PROCESAMIENTO (CON PAUSA ANTI-BLOQUEO) ---
 def procesar_v10(lista_tickers, nombre_mercado, progreso_bar, monitor_text):
     resultados = []
     total = len(lista_tickers)
     for i, t in enumerate(lista_tickers):
         try:
             monitor_text.text(f"🔍 Analizando {nombre_mercado}: {t} ({i+1}/{total})")
-            
-            # IMPORTANTE: No pasamos 'session'. Dejamos que yfinance gestione curl_cffi solo.
             tk = yf.Ticker(t)
             
-            # Usamos fast_info para datos rápidos (menos riesgo de baneo)
-            f_info = tk.fast_info
-            p = f_info['last_price']
+            # 1. Intentamos obtener precio rápido
+            p = tk.fast_info['last_price']
             
-            # Pedimos info fundamental
+            # 2. Intentamos fundamentales
             info = tk.info
-            target = info.get('targetMeanPrice')
-            pe = info.get('forwardPE', 15)
-            eps = info.get('forwardEps', 1)
+            tj = info.get('targetMeanPrice') or (info.get('forwardPE', 15) * info.get('forwardEps', 1))
             ebitda = info.get('ebitda', 0) or 0
-            
-            p_justo = target if target else (pe * eps)
-            m = ((p_justo - p) / p) * 100 if p else 0
+            m = ((tj - p) / p) * 100 if p else 0
             
             if m > 5 and ebitda > 0:
                 estado = "🟢 COMPRA CLARA" if m > 15 else "🟡 VIGILAR"
@@ -63,11 +55,17 @@ def procesar_v10(lista_tickers, nombre_mercado, progreso_bar, monitor_text):
                     "Precio": round(p, 2), "Margen %": round(m, 1), "Sector": info.get('sector', 'N/A')
                 })
             
-            # Pausa estratégica para evitar el 403
-            time.sleep(0.2) 
+            # --- PAUSA CRÍTICA ---
+            # Yahoo permite aprox 2000 peticiones por hora. 
+            # 0.5 seg asegura que no excedamos el límite de ráfaga.
+            time.sleep(0.5)
 
         except Exception as e:
+            if "Rate Limit" in str(e) or "429" in str(e):
+                monitor_text.warning(f"⚠️ Límite alcanzado en {t}. Esperando 10 segundos...")
+                time.sleep(10)
             continue
+            
         progreso_bar.progress((i + 1) / total)
     return resultados
 
@@ -80,10 +78,11 @@ with tab1:
     if universo:
         c1, c2 = st.columns(2)
         with c1:
-            mercado_selec = st.selectbox("Mercado:", list(universo.keys()))
+            mercado_selec = st.selectbox("Seleccionar Mercado:", list(universo.keys()))
             btn_solo = st.button(f"🚀 Escanear {mercado_selec}")
         with c2:
-            btn_global = st.button("🌍 ESCANEO GLOBAL")
+            st.write("Análisis Global")
+            btn_global = st.button("🌍 EJECUTAR ESCANEO TOTAL")
 
         df_final = pd.DataFrame()
         if btn_solo:
@@ -97,14 +96,17 @@ with tab1:
         if not df_final.empty:
             df_final = df_final.drop_duplicates(subset=['Ticker'])
             st.success(f"✅ {len(df_final)} Oportunidades detectadas.")
+            
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_final.to_excel(writer, index=False, sheet_name='V10')
-            st.download_button("📥 Descargar Reporte Excel", output.getvalue(), "Reporte_V10.xlsx")
-            st.dataframe(df_final, use_container_width=True)
+            st.download_button(label="📥 Descargar Excel", data=output.getvalue(), file_name='Reporte_V10.xlsx')
+            
+            df_final.index = range(1, len(df_final) + 1)
+            st.dataframe(df_final.sort_values(by=["Mercado", "Margen %"], ascending=[True, False]), use_container_width=True)
 
 with tab2:
-    st.subheader("Análisis 360 de Activo")
+    st.subheader("Análisis 360")
     ca1, ca2 = st.columns([1, 2])
     with ca1: mkt = st.radio("Mercado:", ["EUA", "México (.MX)"], key="aud_mkt")
     with ca2: tk_in = st.text_input("Ticker:", "MSFT").upper()
@@ -112,34 +114,25 @@ with tab2:
     ticker_final = tk_in if mkt == "EUA" else (f"{tk_in}.MX" if ".MX" not in tk_in else tk_in)
 
     if ticker_final:
-        with st.spinner('Auditando...'):
+        with st.spinner('Ejecutando Auditoría...'):
             acc = yf.Ticker(ticker_final)
             h = acc.history(period="1y")
-            info = acc.info
             if not h.empty:
-                h['RSI'] = ta.rsi(h['Close'], length=14)
-                h['SMA200'] = ta.sma(h['Close'], length=200)
+                info = acc.info
                 p_act = h['Close'].iloc[-1]
-                rsi_v = h['RSI'].iloc[-1]
-                sma_v = h['SMA200'].iloc[-1]
+                st.markdown(f"### 🏢 {info.get('longName', ticker_final)}")
                 
-                p_justo = info.get('targetMeanPrice') or (info.get('forwardPE', 15) * info.get('forwardEps', 1))
-                margen = ((p_justo - p_act) / p_act) * 100
-                ebitda = info.get('ebitda', 0) or 0
-                
+                # Consola Hacker
                 reporte = f"""
 =================================================================
                   MÉTRICA           VALOR       ESTADO
 -----------------------------------------------------------------
             Precio Actual          ${p_act:>8.2f}    Cotizando
-            Margen Seg.            {margen:>7.1f}%       {"✅" if margen > 15 else "❌"}
-                RSI (14d)             {rsi_v:>7.1f}  {"📉" if rsi_v < 35 else "⚖️"}
-                   EBITDA          {ebitda:>14,}       {"✅" if ebitda > 0 else "⚠️"}
+                   EBITDA          {info.get('ebitda', 0):>14,}       {"✅" if info.get('ebitda', 0) > 0 else "⚠️"}
 =================================================================
 """
                 st.code(reporte, language="text")
                 fig = go.Figure(data=[go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'])])
-                fig.add_trace(go.Scatter(x=h.index, y=h['SMA200'], line=dict(color='orange')))
                 fig.update_layout(template="plotly_dark", height=400, xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
 
