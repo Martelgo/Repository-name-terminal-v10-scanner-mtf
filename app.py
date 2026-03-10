@@ -13,8 +13,8 @@ st.title("🛰️ Terminal V10 Pro - Escáner Global Autónomo")
 
 # --- 0. CONFIGURACIÓN TELEGRAM (SIDEBAR) ---
 st.sidebar.header("🤖 Configuración Bot Telegram")
-tel_token = st.sidebar.text_input("Bot Token:", type="password", help="Consíguelo con @BotFather")
-tel_chatid = st.sidebar.text_input("Chat ID:", help="Consíguelo con @userinfobot")
+tel_token = st.sidebar.text_input("Bot Token:", type="password")
+tel_chatid = st.sidebar.text_input("Chat ID:")
 
 def enviar_telegram(mensaje):
     if tel_token and tel_chatid:
@@ -49,16 +49,14 @@ def obtener_universo_autonomo():
         st.error(f"⚠️ Error al conectar con fuentes: {e}")
         return {}
 
-# --- 2. MOTOR DE PROCESAMIENTO CON ESCUDO ANTI-BLOQUEO ---
+# --- 2. MOTOR DE PROCESAMIENTO ---
 def procesar_lista_tickers(lista_tickers, nombre_mercado, progreso_bar, monitor_text):
     resultados = []
     total = len(lista_tickers)
-    
     for i, t in enumerate(lista_tickers):
         try:
             monitor_text.text(f"🔍 Escaneando {nombre_mercado}: {t} ({i+1}/{total})")
-            time.sleep(0.5) # Pausa estratégica anti-bloqueo
-            
+            time.sleep(0.5) 
             tk = yf.Ticker(t)
             p = tk.fast_info['last_price']
             info = tk.info
@@ -66,31 +64,20 @@ def procesar_lista_tickers(lista_tickers, nombre_mercado, progreso_bar, monitor_
             target = info.get('targetMeanPrice', p)
             margen = ((target - p) / p) * 100 if p else 0
             ebitda = info.get('ebitda', 0) or 0
-            
             n1 = round(p * 0.96, 2)
             
             if margen > 15 and ebitda > 0:
                 estado = "🟢 COMPRA CLARA"
-                # Alerta Telegram si toca el Nivel 1
                 if p <= n1:
-                    msg = f"🚨 *ALERTA V10:* {t} en zona de compra.\nPrecio: ${p:.2f}\nMargen: {margen:.1f}%"
-                    enviar_telegram(msg)
+                    enviar_telegram(f"🚨 *V10 COMPRA:* {t}\nPrecio: ${p:.2f}\nMargen: {margen:.1f}%")
             elif margen > 5 and ebitda > 0:
                 estado = "🟡 VIGILAR"
-            else:
-                continue 
+            else: continue 
                 
-            resultados.append({
-                "Mercado": nombre_mercado, "Ticker": t, "Estado": estado,
-                "Precio": round(p, 2), "Margen %": round(margen, 1), "Nivel 1": n1
-            })
-        except Exception as e:
-            if "RateLimitError" in str(e):
-                monitor_text.text("⏳ Límite de Yahoo. Pausa de 30 seg...")
-                time.sleep(30)
-            continue
+            resultados.append({"Mercado": nombre_mercado, "Ticker": t, "Estado": estado,
+                               "Precio": round(p, 2), "Margen %": round(margen, 1), "Nivel 1": n1})
+        except: continue
         progreso_bar.progress((i + 1) / total)
-    
     return resultados
 
 # --- 3. INTERFAZ ---
@@ -99,7 +86,6 @@ tab1, tab2, tab3 = st.tabs(["🎯 RADAR SEMÁFORO", "🔍 AUDITORIA", "🌡️ S
 with tab1:
     st.subheader("Radar de Oportunidades Global")
     universo = obtener_universo_autonomo()
-    
     if universo:
         c1, c2 = st.columns(2)
         with c1:
@@ -112,50 +98,56 @@ with tab1:
         if btn_solo or btn_global:
             progreso = st.progress(0); monitor = st.empty()
             if btn_solo:
-                datos = procesar_lista_tickers(universo[mercado_selec], mercado_selec, progreso, monitor)
-                df_final = pd.DataFrame(datos)
+                df_final = pd.DataFrame(procesar_lista_tickers(universo[mercado_selec], mercado_selec, progreso, monitor))
             else:
                 todas = []
                 for m_nom, m_tics in universo.items():
-                    res = procesar_lista_tickers(m_tics, m_nom, progreso, monitor)
-                    todas.extend(res)
+                    todas.extend(procesar_lista_tickers(m_tics, m_nom, progreso, monitor))
                 df_final = pd.DataFrame(todas)
             monitor.empty()
 
         if not df_final.empty:
             df_final = df_final.drop_duplicates(subset=['Ticker'])
-            st.success(f"✅ {len(df_final)} oportunidades detectadas.")
             st.dataframe(df_final.sort_values(by="Margen %", ascending=False), use_container_width=True)
 
 with tab2:
-    st.subheader("Auditoría Individual Elite")
-    tk_audit = st.text_input("Ingrese Ticker (ej: ORCL, TSLA, WALMEX.MX):", "").upper()
+    st.subheader("Análisis 360 de Activo")
     
-    if tk_audit:
-        with st.spinner(f"Generando Informe V10 para {tk_audit}..."):
-            acc = yf.Ticker(tk_audit)
+    # --- RECUPERACIÓN DE OPCIÓN DE MERCADO ---
+    col_m, col_t = st.columns([1, 2])
+    with col_m:
+        tipo_m = st.radio("Tipo de Mercado:", ["EUA (Gringo)", "México (BMV)"], horizontal=True)
+    with col_t:
+        tk_input = st.text_input("Ingresa el Ticker:", "ORCL").upper()
+    
+    # Lógica para autocompletar .MX si es México
+    if tipo_m == "México (BMV)" and not tk_input.endswith(".MX"):
+        tk_final = f"{tk_input}.MX"
+    else:
+        tk_final = tk_input
+
+    if tk_final:
+        with st.spinner(f"Generando Informe V10 para {tk_final}..."):
+            acc = yf.Ticker(tk_final)
             try:
                 info = acc.info
                 hist = acc.history(period="1y")
                 precio_act = acc.fast_info['last_price']
                 
                 if not hist.empty:
-                    # Lógica de Datos
                     target = info.get('targetMeanPrice', precio_act)
                     margen_seg = ((target - precio_act) / precio_act) * 100
                     ebitda_val = info.get('ebitda', 0)
                     rsi_val = ta.rsi(hist['Close'], length=14).iloc[-1]
                     sma200 = hist['Close'].rolling(window=200).mean().iloc[-1]
                     
-                    # Estados Semánticos
                     est_margen = "✅ DESCUENTO" if margen_seg > 15 else "❌ CARO"
                     est_rsi = "⚖️ NEUTRAL" if 30 <= rsi_val <= 70 else ("🔥 SOBREVENTA" if rsi_val < 30 else "🧊 SOBRECOMPRA")
                     est_sma = "🚀 ALCISTA" if precio_act > sma200 else "⚠️ BAJISTA"
                     est_ebitda = "✅ Sólido" if ebitda_val > 0 else "❌ Débil"
                     estrategia = "CONTINUACION (Acción en descuento)" if margen_seg > 10 else "ESPERAR (Precio elevado)"
 
-                    # --- RECUADRO PROFESIONAL (V10 STYLE) ---
-                    st.markdown(f"### 🏢 {info.get('longName', tk_audit)}")
+                    st.markdown(f"### 🏢 {info.get('longName', tk_final)}")
                     st.markdown(f"**🔬 ESTRATEGIA: {estrategia}**")
                     
                     cuadro = f"""
@@ -176,16 +168,13 @@ with tab2:
                     """
                     st.markdown(cuadro)
 
-                    # Gráfico
                     fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Precio")])
                     hist['SMA200_p'] = hist['Close'].rolling(window=200).mean()
                     fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA200_p'], name="SMA 200", line=dict(color='orange', width=2)))
                     fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=450)
                     st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.error("Ticker no encontrado o sin datos.")
-            except:
-                st.error("Error de conexión. Intente en 1 minuto.")
+                else: st.error("Sin datos para este ticker.")
+            except: st.error("Error de conexión. Intenta en 1 minuto.")
 
 with tab3:
     st.subheader("Sentimiento del Mercado")
