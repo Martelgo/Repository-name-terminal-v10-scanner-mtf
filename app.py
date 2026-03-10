@@ -37,7 +37,7 @@ def obtener_universo_autonomo():
         nasdaq_table = pd.read_html(url_nas, storage_options=headers)[4]
         nasdaq_tickers = nasdaq_table['Ticker'].tolist()
         
-        bmv_tickers = ["WALMEX.MX", "AMX.MX", "GFNORTEO.MX", "FEMSAUBD.MX", "GMEXICOB.MX"]
+        bmv_tickers = ["WALMEX.MX", "AMX.MX", "GFNORTEO.MX", "FEMSAUBD.MX", "GMEXICOB.MX", "TLEVISAA.MX", "ASURB.MX", "BBAJIOO.MX", "GAPB.MX", "CEMEXCPO.MX"]
         
         return {"S&P 500": sp500_tickers, "NASDAQ 100": nasdaq_tickers, "BMV (México)": bmv_tickers}
     except Exception as e:
@@ -75,7 +75,7 @@ def procesar_lista_tickers(lista_tickers, nombre_mercado, progreso_bar, monitor_
         progreso_bar.progress((i + 1) / total)
     return resultados
 
-# --- 3. INTERFAZ RECONSTRUIDA ---
+# --- 3. INTERFAZ ---
 tab1, tab2, tab3 = st.tabs(["🎯 RADAR SEMÁFORO", "🔍 AUDITORIA", "🌡️ SENTIMIENTO"])
 
 with tab1:
@@ -104,40 +104,70 @@ with tab1:
             st.dataframe(df_final.sort_values(by="Margen %", ascending=False), use_container_width=True)
 
 with tab2:
-    st.subheader("Auditoría de Activo Individual")
-    tk_in = st.text_input("Ingresa Ticker (ej: TSLA, ORCL):", "TSLA").upper()
-    if tk_in:
-        asset = yf.Ticker(tk_in)
-        hist = asset.history(period="1y")
-        if not hist.empty:
-            # Gráfica de Velas Restaurada
-            fig_cand = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'])])
-            fig_cand.update_layout(template="plotly_dark", title=f"Histórico 1 Año: {tk_in}", xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig_cand, use_container_width=True)
-        else:
-            st.warning("No se encontraron datos para este ticker.")
+    st.subheader("Auditoría Individual de Activo")
+    tk_audit = st.text_input("Ingrese Ticker para auditar:", "ORCL").upper()
+    
+    if tk_audit:
+        with st.spinner(f"Auditando {tk_audit}..."):
+            acc = yf.Ticker(tk_audit)
+            info = acc.info
+            hist = acc.history(period="1y")
+            
+            if not hist.empty:
+                # --- Lógica de Auditoría V10 ---
+                precio_act = acc.fast_info['last_price']
+                target = info.get('targetMeanPrice', precio_act)
+                margen_seg = ((target - precio_act) / precio_act) * 100
+                ebitda_val = info.get('ebitda', 0)
+                rsi_val = ta.rsi(hist['Close'], length=14).iloc[-1]
+                sma200 = hist['Close'].rolling(window=200).mean().iloc[-1]
+                
+                # Columnas de Métricas
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Precio Actual", f"${precio_act:.2f}")
+                c2.metric("Precio Justo", f"${target:.2f}", f"{margen_seg:.1f}%")
+                c3.metric("RSI (14d)", f"{rsi_val:.1f}")
+                c4.metric("EBITDA", f"{ebitda_val:,.0f}")
+
+                # Gráfico de Velas
+                fig = go.Figure(data=[go.Candlestick(
+                    x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'],
+                    name="Precio"
+                )])
+                # Añadir SMA 200 al gráfico
+                hist['SMA200'] = hist['Close'].rolling(window=200).mean()
+                fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA200'], name="SMA 200", line=dict(color='orange', width=2)))
+                
+                fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=500)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Tabla de Niveles V10
+                st.write("### 📍 Niveles de Compra V10")
+                n1, n2, n3 = precio_act*0.96, precio_act*0.92, precio_act*0.88
+                st.table(pd.DataFrame({
+                    "Nivel 1 (Entrada)": [f"${n1:.2f}"],
+                    "Nivel 2 (Promedio)": [f"${n2:.2f}"],
+                    "Nivel 3 (Suelo)": [f"${n3:.2f}"]
+                }))
+            else:
+                st.error("No se pudieron obtener datos históricos para este ticker.")
 
 with tab3:
     st.subheader("Sentimiento del Mercado (Termómetro)")
     spy = yf.Ticker("SPY").history(period="1mo")
     if not spy.empty:
         rsi_spy = ta.rsi(spy['Close'], length=14).iloc[-1]
-        
-        # Restauración del Velocímetro
         fig_gauge = go.Figure(go.Indicator(
             mode = "gauge+number",
             value = rsi_spy,
-            title = {'text': "RSI SPY (Sentimiento)"},
             gauge = {
                 'axis': {'range': [0, 100]},
                 'bar': {'color': "white"},
                 'steps': [
                     {'range': [0, 30], 'color': "red"},
                     {'range': [30, 70], 'color': "gray"},
-                    {'range': [70, 100], 'color': "green"}],
-                'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': rsi_spy}
+                    {'range': [70, 100], 'color': "green"}]
             }
         ))
-        fig_gauge.update_layout(template="plotly_dark")
+        fig_gauge.update_layout(template="plotly_dark", height=400)
         st.plotly_chart(fig_gauge, use_container_width=True)
-        st.info("RSI < 30: Pánico (Oportunidad) | RSI > 70: Euforia (Riesgo)")
