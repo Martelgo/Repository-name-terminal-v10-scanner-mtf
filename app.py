@@ -4,193 +4,158 @@ import pandas as pd
 import pandas_ta as ta
 import plotly.graph_objects as go
 from io import BytesIO
-import requests
-import time
 
 # Configuración visual de la Terminal
 st.set_page_config(page_title="V10 Elite Terminal Pro", layout="wide")
 st.title("🛰️ Terminal V10 Pro - Escáner Global Autónomo")
 
-# --- 0. CONFIGURACIÓN TELEGRAM (SIDEBAR) ---
-st.sidebar.header("🤖 Configuración Bot Telegram")
-tel_token = st.sidebar.text_input("Bot Token:", type="password")
-tel_chatid = st.sidebar.text_input("Chat ID:")
-
-def enviar_telegram(mensaje):
-    if tel_token and tel_chatid:
-        url = f"https://api.telegram.org/bot{tel_token}/sendMessage"
-        payload = {"chat_id": tel_chatid, "text": mensaje, "parse_mode": "Markdown"}
-        try:
-            requests.post(url, json=payload)
-        except:
-            pass
-
 # --- 1. OBTENCIÓN AUTOMÁTICA DE TICKERS ---
 @st.cache_data(ttl=86400)
 def obtener_universo_autonomo():
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        url_sp = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        sp500_table = pd.read_html(url_sp, storage_options=headers)[0]
-        sp500_tickers = sp500_table['Symbol'].str.replace('.', '-').tolist()
-        
-        url_nas = 'https://en.wikipedia.org/wiki/Nasdaq-100'
-        nasdaq_table = pd.read_html(url_nas, storage_options=headers)[4]
-        nasdaq_tickers = nasdaq_table['Ticker'].tolist()
-        
-        bmv_tickers = [
-            "WALMEX.MX", "AMX.MX", "GFNORTEO.MX", "FEMSAUBD.MX", "GMEXICOB.MX", 
-            "TLEVISAA.MX", "ASURB.MX", "BBAJIOO.MX", "GAPB.MX", "CEMEXCPO.MX",
-            "ALFAA.MX", "BIMBOA.MX", "GRUMAB.MX", "ORBIA.MX", "KIMBERA.MX"
-        ]
-        
-        return {"S&P 500": sp500_tickers, "NASDAQ 100": nasdaq_tickers, "BMV (México)": bmv_tickers}
-    except Exception as e:
-        st.error(f"⚠️ Error al conectar con fuentes: {e}")
-        return {}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    try:
+        # S&P 500
+        url_sp = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+        sp500_table = pd.read_html(url_sp, storage_options=headers)[0]
+        sp500_tickers = sp500_table['Symbol'].str.replace('.', '-').tolist()
+        
+        # NASDAQ 100
+        url_nas = 'https://en.wikipedia.org/wiki/Nasdaq-100'
+        nasdaq_table = pd.read_html(url_nas, storage_options=headers)[4]
+        nasdaq_tickers = nasdaq_table['Ticker'].tolist()
+        
+        # BMV (Lista ampliada del IPC México)
+        bmv_tickers = [
+            "WALMEX.MX", "AMX.MX", "GFNORTEO.MX", "FEMSAUBD.MX", "GMEXICOB.MX", 
+            "TLEVISAA.MX", "ASURB.MX", "BBAJIOO.MX", "GAPB.MX", "CEMEXCPO.MX",
+            "ALFAA.MX", "ALPEKA.MX", "BIMBOA.MX", "GRUMAB.MX", "ORBIA.MX", 
+            "PINFRA.MX", "KIMBERA.MX", "AC.MX", "LABB.MX", "OMAB.MX"
+        ]
+        
+        return {
+            "S&P 500": sp500_tickers,
+            "NASDAQ 100": nasdaq_tickers,
+            "BMV (México)": bmv_tickers
+        }
+    except Exception as e:
+        st.error(f"⚠️ Error al conectar con fuentes: {e}")
+        return {}
 
 # --- 2. MOTOR DE PROCESAMIENTO ---
 def procesar_lista_tickers(lista_tickers, nombre_mercado, progreso_bar, monitor_text):
-    resultados = []
-    total = len(lista_tickers)
-    for i, t in enumerate(lista_tickers):
-        try:
-            monitor_text.text(f"🔍 Escaneando {nombre_mercado}: {t} ({i+1}/{total})")
-            time.sleep(0.5) 
-            tk = yf.Ticker(t)
-            p = tk.fast_info['last_price']
-            info = tk.info
-            
-            target = info.get('targetMeanPrice', p)
-            margen = ((target - p) / p) * 100 if p else 0
-            ebitda = info.get('ebitda', 0) or 0
-            n1 = round(p * 0.96, 2)
-            
-            if margen > 15 and ebitda > 0:
-                estado = "🟢 COMPRA CLARA"
-                if p <= n1:
-                    enviar_telegram(f"🚨 *V10 COMPRA:* {t}\nPrecio: ${p:.2f}\nMargen: {margen:.1f}%")
-            elif margen > 5 and ebitda > 0:
-                estado = "🟡 VIGILAR"
-            else: continue 
-                
-            resultados.append({"Mercado": nombre_mercado, "Ticker": t, "Estado": estado,
-                               "Precio": round(p, 2), "Margen %": round(margen, 1), "Nivel 1": n1})
-        except: continue
-        progreso_bar.progress((i + 1) / total)
-    return resultados
+    resultados = []
+    total = len(lista_tickers)
+    
+    for i, t in enumerate(lista_tickers):
+        try:
+            monitor_text.text(f"🔍 Analizando {nombre_mercado}: {t} ({i+1}/{total})")
+            tk = yf.Ticker(t)
+            
+            p = tk.fast_info['last_price']
+            info = tk.info
+            
+            # Lógica V10
+            target = info.get('targetMeanPrice')
+            eps = info.get('forwardEps')
+            pe = info.get('forwardPE', 15)
+            ebitda = info.get('ebitda', 0) or 0
+            
+            p_justo = target if target else (pe * eps if eps else p)
+            margen = ((p_justo - p) / p) * 100 if p else 0
+            
+            # Filtro Semáforo
+            if margen > 15 and ebitda > 0:
+                estado = "🟢 COMPRA CLARA"
+            elif margen > 5 and ebitda > 0:
+                estado = "🟡 VIGILAR"
+            else:
+                continue 
+                
+            resultados.append({
+                "Mercado": nombre_mercado,
+                "Ticker": t,
+                "Estado": estado,
+                "Precio": round(p, 2),
+                "Margen %": round(margen, 1),
+                "Sector": info.get('sector', 'N/A')
+            })
+        except:
+            continue
+        progreso_bar.progress((i + 1) / total)
+    
+    return resultados
 
 # --- 3. INTERFAZ ---
 tab1, tab2, tab3 = st.tabs(["🎯 RADAR SEMÁFORO", "🔍 AUDITORIA", "🌡️ SENTIMIENTO"])
 
 with tab1:
-    st.subheader("Radar de Oportunidades Global")
-    universo = obtener_universo_autonomo()
-    if universo:
-        c1, c2 = st.columns(2)
-        with c1:
-            mercado_selec = st.selectbox("Mercado Específico:", list(universo.keys()))
-            btn_solo = st.button(f"🚀 Escanear {mercado_selec}")
-        with c2:
-            btn_global = st.button("🌍 EJECUTAR ESCANEO GLOBAL")
+    st.subheader("Radar de Oportunidades Segmentado")
+    universo = obtener_universo_autonomo()
+    
+    if universo:
+        c1, c2 = st.columns(2)
+        with c1:
+            mercado_selec = st.selectbox("Mercado Específico:", list(universo.keys()))
+            btn_solo = st.button(f"🚀 Escanear {mercado_selec}")
+        with c2:
+            st.write("Análisis de Todo el Universo")
+            btn_global = st.button("🌍 EJECUTAR ESCANEO GLOBAL")
 
-        df_final = pd.DataFrame()
-        if btn_solo or btn_global:
-            progreso = st.progress(0); monitor = st.empty()
-            if btn_solo:
-                df_final = pd.DataFrame(procesar_lista_tickers(universo[mercado_selec], mercado_selec, progreso, monitor))
-            else:
-                todas = []
-                for m_nom, m_tics in universo.items():
-                    todas.extend(procesar_lista_tickers(m_tics, m_nom, progreso, monitor))
-                df_final = pd.DataFrame(todas)
-            monitor.empty()
+        df_final = pd.DataFrame()
 
-        if not df_final.empty:
-            df_final = df_final.drop_duplicates(subset=['Ticker'])
-            st.dataframe(df_final.sort_values(by="Margen %", ascending=False), use_container_width=True)
+        if btn_solo:
+            progreso = st.progress(0)
+            monitor = st.empty()
+            datos = procesar_lista_tickers(universo[mercado_selec], mercado_selec, progreso, monitor)
+            df_final = pd.DataFrame(datos)
+            monitor.empty()
+
+        elif btn_global:
+            todas_oportunidades = []
+            progreso = st.progress(0)
+            monitor = st.empty()
+            for m_nombre, m_tickers in universo.items():
+                res_m = procesar_lista_tickers(m_tickers, m_nombre, progreso, monitor)
+                todas_oportunidades.extend(res_m)
+            df_final = pd.DataFrame(todas_oportunidades)
+            monitor.empty()
+
+        if not df_final.empty:
+            # --- LIMPIEZA DE DUPLICADOS (FIX) ---
+            df_final = df_final.drop_duplicates(subset=['Ticker'], keep='first')
+            
+            st.success(f"✅ Se encontraron {len(df_final)} oportunidades únicas.")
+            
+            # Botón de Excel
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_final.to_excel(writer, index=False, sheet_name='Oportunidades_V10')
+            excel_data = output.getvalue()
+            
+            st.download_button(
+                label="📥 Descargar Reporte en Excel",
+                data=excel_data,
+                file_name='Reporte_V10_Final.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            
+            df_final.index = range(1, len(df_final) + 1)
+            st.dataframe(df_final.sort_values(by=["Mercado", "Margen %"], ascending=[True, False]), use_container_width=True)
 
 with tab2:
-    st.subheader("Análisis 360 de Activo")
-    
-    # --- RECUPERACIÓN DE OPCIÓN DE MERCADO ---
-    col_m, col_t = st.columns([1, 2])
-    with col_m:
-        tipo_m = st.radio("Tipo de Mercado:", ["EUA (Gringo)", "México (BMV)"], horizontal=True)
-    with col_t:
-        tk_input = st.text_input("Ingresa el Ticker:", "ORCL").upper()
-    
-    # Lógica para autocompletar .MX si es México
-    if tipo_m == "México (BMV)" and not tk_input.endswith(".MX"):
-        tk_final = f"{tk_input}.MX"
-    else:
-        tk_final = tk_input
-
-    if tk_final:
-        with st.spinner(f"Generando Informe V10 para {tk_final}..."):
-            acc = yf.Ticker(tk_final)
-            try:
-                info = acc.info
-                hist = acc.history(period="1y")
-                precio_act = acc.fast_info['last_price']
-                
-                if not hist.empty:
-                    target = info.get('targetMeanPrice', precio_act)
-                    margen_seg = ((target - precio_act) / precio_act) * 100
-                    ebitda_val = info.get('ebitda', 0)
-                    rsi_val = ta.rsi(hist['Close'], length=14).iloc[-1]
-                    sma200 = hist['Close'].rolling(window=200).mean().iloc[-1]
-                    
-                    est_margen = "✅ DESCUENTO" if margen_seg > 15 else "❌ CARO"
-                    est_rsi = "⚖️ NEUTRAL" if 30 <= rsi_val <= 70 else ("🔥 SOBREVENTA" if rsi_val < 30 else "🧊 SOBRECOMPRA")
-                    est_sma = "🚀 ALCISTA" if precio_act > sma200 else "⚠️ BAJISTA"
-                    est_ebitda = "✅ Sólido" if ebitda_val > 0 else "❌ Débil"
-                    estrategia = "CONTINUACION (Acción en descuento)" if margen_seg > 10 else "ESPERAR (Precio elevado)"
-
-                    st.markdown(f"### 🏢 {info.get('longName', tk_final)}")
-                    st.markdown(f"**🔬 ESTRATEGIA: {estrategia}**")
-                    
-                    cuadro = f"""
-                    ```text
-                    =================================================================
-                              MÉTRICA           VALOR          ESTADO
-                    -----------------------------------------------------------------
-                         Precio Actual       $ {precio_act:>8.2f}    Cotizando
-                    Precio Justo de la Acción $ {target:>8.2f}    Referencia
-                           Margen Seg.         {margen_seg:>8.1f}%    {est_margen}
-                            RSI (14d)          {rsi_val:>8.1f}    {est_rsi}
-                             SMA 200         $ {sma200:>8.2f}    {est_sma}
-                             EBITDA            {ebitda_val:>14,.0}    {est_ebitda}
-                    -----------------------------------------------------------------
-                    📍 NIVEL DE COMPRA:  1: ${precio_act*0.96:.2f} | 2: ${precio_act*0.92:.2f} | 3: ${precio_act*0.88:.2f}
-                    =================================================================
-                    ```
-                    """
-                    st.markdown(cuadro)
-
-                    fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name="Precio")])
-                    hist['SMA200_p'] = hist['Close'].rolling(window=200).mean()
-                    fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA200_p'], name="SMA 200", line=dict(color='orange', width=2)))
-                    fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=450)
-                    st.plotly_chart(fig, use_container_width=True)
-                else: st.error("Sin datos para este ticker.")
-            except: st.error("Error de conexión. Intenta en 1 minuto.")
+    st.subheader("Auditoría de Activo")
+    tk_in = st.text_input("Ticker:", "MSFT").upper()
+    if tk_in:
+        acc = yf.Ticker(tk_in)
+        h = acc.history(period="1y")
+        if not h.empty:
+            fig = go.Figure(data=[go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'])])
+            fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
 
 with tab3:
-    st.subheader("Sentimiento del Mercado")
-    spy = yf.Ticker("SPY").history(period="1mo")
-    if not spy.empty:
-        rsi_spy = ta.rsi(spy['Close'], length=14).iloc[-1]
-        fig_gauge = go.Figure(go.Indicator(
-            mode = "gauge+number", value = rsi_spy,
-            title = {'text': "Sentimiento (RSI SPY)"},
-            gauge = {
-                'axis': {'range': [0, 100]},
-                'steps': [
-                    {'range': [0, 30], 'color': "red"},
-                    {'range': [30, 70], 'color': "gray"},
-                    {'range': [70, 100], 'color': "green"}]
-            }
-        ))
-        fig_gauge.update_layout(template="plotly_dark", height=400)
-        st.plotly_chart(fig_gauge, use_container_width=True)
+    st.subheader("Sentimiento del Mercado")
+    spy_h = yf.Ticker("SPY").history(period="1mo")
+    rsi_val = ta.rsi(spy_h['Close'], length=14).iloc[-1]
+    st.metric("RSI SPY", f"{rsi_val:.2f}")
+    st.info("RSI < 30: Pánico | RSI > 70: Euforia")
