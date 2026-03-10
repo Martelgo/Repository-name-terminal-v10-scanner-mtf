@@ -1,13 +1,29 @@
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import plotly.graph_objects as go
 from io import BytesIO
+import requests  # Nueva librería para Telegram
 
 # Configuración visual de la Terminal
 st.set_page_config(page_title="V10 Elite Terminal Pro", layout="wide")
 st.title("🛰️ Terminal V10 Pro - Escáner Global Autónomo")
+
+# --- CONFIGURACIÓN TELEGRAM (SIDEBAR) ---
+st.sidebar.header("🤖 Configuración Bot Telegram")
+tel_token = st.sidebar.text_input("Bot Token:", type="password", help="Consíguelo con @BotFather")
+tel_chatid = st.sidebar.text_input("Chat ID:", help="Consíguelo con @userinfobot")
+
+def enviar_telegram(mensaje):
+    if tel_token and tel_chatid:
+        url = f"https://api.telegram.org/bot{tel_token}/sendMessage"
+        payload = {"chat_id": tel_chatid, "text": mensaje, "parse_mode": "Markdown"}
+        try:
+            requests.post(url, json=payload)
+        except Exception as e:
+            st.error(f"Error enviando Telegram: {e}")
 
 # --- 1. OBTENCIÓN AUTOMÁTICA DE TICKERS ---
 @st.cache_data(ttl=86400)
@@ -41,7 +57,7 @@ def obtener_universo_autonomo():
         st.error(f"⚠️ Error al conectar con fuentes: {e}")
         return {}
 
-# --- 2. MOTOR DE PROCESAMIENTO ---
+# --- 2. MOTOR DE PROCESAMIENTO CON ALERTAS ---
 def procesar_lista_tickers(lista_tickers, nombre_mercado, progreso_bar, monitor_text):
     resultados = []
     total = len(lista_tickers)
@@ -63,9 +79,29 @@ def procesar_lista_tickers(lista_tickers, nombre_mercado, progreso_bar, monitor_
             p_justo = target if target else (pe * eps if eps else p)
             margen = ((p_justo - p) / p) * 100 if p else 0
             
+            # --- MEJORA: CÁLCULO DE NIVELES V10 ---
+            n1 = round(p * 0.96, 2)  # -4% aprox
+            n2 = round(p * 0.92, 2)  # -8% aprox
+            
             # Filtro Semáforo
             if margen > 15 and ebitda > 0:
                 estado = "🟢 COMPRA CLARA"
+                
+                # --- SISTEMA DE ALERTA TELEGRAM ---
+                distancia_n1 = ((p - n1) / n1) * 100
+                if p <= n1:
+                    msg = (f"🚨 *ALERTA V10: {t} EN ZONA DE CAZA*\n\n"
+                           f"💰 Precio: ${p:.2f}\n"
+                           f"🎯 Nivel 1: ${n1:.2f}\n"
+                           f"📈 Margen Seg: {margen:.1f}%\n"
+                           f"📊 EBITDA: {ebitda:,} ✅ Sólido\n"
+                           f"🏢 Mercado: {nombre_mercado}")
+                    enviar_telegram(msg)
+                elif distancia_n1 <= 1.5:
+                    msg = (f"🟡 *VIGILANCIA: {t} CERCA DE NIVEL 1*\n"
+                           f"Precio actual ${p:.2f} está a {distancia_n1:.1f}% del objetivo.")
+                    enviar_telegram(msg)
+            
             elif margen > 5 and ebitda > 0:
                 estado = "🟡 VIGILAR"
             else:
@@ -77,7 +113,8 @@ def procesar_lista_tickers(lista_tickers, nombre_mercado, progreso_bar, monitor_
                 "Estado": estado,
                 "Precio": round(p, 2),
                 "Margen %": round(margen, 1),
-                "Sector": info.get('sector', 'N/A')
+                "Sector": info.get('sector', 'N/A'),
+                "Nivel 1": n1
             })
         except:
             continue
@@ -85,7 +122,7 @@ def procesar_lista_tickers(lista_tickers, nombre_mercado, progreso_bar, monitor_
     
     return resultados
 
-# --- 3. INTERFAZ ---
+# --- 3. INTERFAZ (EL RESTO DEL CÓDIGO SE MANTIENE IGUAL) ---
 tab1, tab2, tab3 = st.tabs(["🎯 RADAR SEMÁFORO", "🔍 AUDITORIA", "🌡️ SENTIMIENTO"])
 
 with tab1:
@@ -121,12 +158,9 @@ with tab1:
             monitor.empty()
 
         if not df_final.empty:
-            # --- LIMPIEZA DE DUPLICADOS (FIX) ---
             df_final = df_final.drop_duplicates(subset=['Ticker'], keep='first')
-            
             st.success(f"✅ Se encontraron {len(df_final)} oportunidades únicas.")
             
-            # Botón de Excel
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_final.to_excel(writer, index=False, sheet_name='Oportunidades_V10')
@@ -159,4 +193,3 @@ with tab3:
     rsi_val = ta.rsi(spy_h['Close'], length=14).iloc[-1]
     st.metric("RSI SPY", f"{rsi_val:.2f}")
     st.info("RSI < 30: Pánico | RSI > 70: Euforia")
-
